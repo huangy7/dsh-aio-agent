@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const args = process.argv.slice(2)
@@ -60,7 +60,9 @@ if (dialect === 'acp') {
   process.stdin.setEncoding('utf8').on('data', (chunk) => { input += chunk })
   process.stdin.on('end', () => {
     const prompt = dialect === 'claude' ? JSON.parse(input).message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n') : dialect === 'cursor' ? input : args.at(-1)
-    log({ prompt, resume, args })
+    const settingsAt = args.indexOf('--settings')
+    const settings = settingsAt >= 0 ? JSON.parse(readFileSync(args[settingsAt + 1], 'utf8')) : undefined
+    log({ prompt, resume, args, settings })
     if (dialect === 'codex') emit({ type: 'thread.started', thread_id: sessionId })
     else if (dialect === 'open-code') emit({ type: 'step_start', sessionID: sessionId })
     else emit({ type: 'system', session_id: sessionId })

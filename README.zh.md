@@ -49,8 +49,9 @@ dsh plugin add github:cocofhu/dsh-aio-agent
 - **默认模型**：会话未选择模型时使用。
 - **启动命令**：替换内置的可执行文件，例如 `"/opt/Cursor Agent/cursor-agent"` 或 `/opt/codex --profile work`，后面附加的选项会保留；含空格的路径要加引号。
 - **自动批准权限请求**：Agent 在执行操作前（如运行命令）发起请求时，开启则批准，关闭则拒绝。Agent 无需请求就能执行的操作，由它自身的设置决定。
+- **API 配置**（Claude Code）：一组命名的环境变量，例如 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_DEFAULT_*_MODEL`。也可以从 **设置 → API 配置** 直接打开这一页。每个会话在输入框上方的下拉框中选择一个，或恢复为 Claude Code 自身配置。选中的配置每轮写成临时 `--settings` 文件传给 CLI，因此能覆盖 `~/.claude/settings.json` 而不改动它。切换配置会新开一个 CLI 会话：旧会话 ID 属于另一个端点，无法续接。
 
-保存的值写入 profile 的 `cordis.patch.yml`，从下一轮开始生效，无需重新加载。
+保存的值写入 profile 的 `cordis.patch.yml`，从下一轮开始生效，无需重新加载。API 配置里的 token 在该文件中以明文保存，与 CLI 自身的配置相同。
 
 ## 会话日志
 

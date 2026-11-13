@@ -3,9 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { handleResume } from '../lib/driver.js'
-import { bindingProjection, buildDiagnosticTrace, serveSessions, serveSkills, serveTrace } from '../lib/index.js'
-import { cursorWorkspaceHash, escapeProjectDir, foldClaudeTranscript, foldCodebuddyTranscript, isSessionId, listBackendSessions, parseCodexIndex, parseOpenCodeList, readBinding } from '../lib/sessions.js'
+import { handleProfile, handleResume } from '../lib/driver.js'
+import { provideLaunch } from '../lib/backends.js'
+import { bindingProjection, buildDiagnosticTrace, profileProjection, serveProfiles, serveSessions, serveSkills, serveTrace } from '../lib/index.js'
+import { cursorWorkspaceHash, escapeProjectDir, foldClaudeTranscript, foldCodebuddyTranscript, isSessionId, listBackendSessions, parseCodexIndex, parseOpenCodeList, readBinding, readProfile } from '../lib/sessions.js'
 
 test('project directories and the Cursor workspace hash follow each CLI', () => {
   assert.equal(escapeProjectDir('/work/app'), '-work-app')
@@ -312,4 +313,48 @@ test('the sessions route lists the preset backend and reports the active id', as
   } finally {
     await rm(home, { recursive: true, force: true })
   }
+})
+
+test('the API profile command records, replaces and clears the session profile', (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify([{ name: 'deepseek', env: { ANTHROPIC_BASE_URL: 'https://a.example' } }, { name: 'glm', env: {} }]) }))
+  t.after(withdraw)
+  const events = []
+  const session = fakeSession(events)
+  const run = (rawInput) => handleProfile({ session, backendId: 'claude-code', rawInput, record: (type, data) => events.push({ type, data }) })
+
+  assert.equal(run('nope').kind, 'error')
+  assert.equal(run('deepseek').kind, 'success')
+  assert.deepEqual(readProfile(session), { name: 'deepseek' })
+  assert.equal(readBinding(session), undefined)
+  assert.equal(run('deepseek').text, 'Already using API profile "deepseek".')
+  assert.equal(run('off').kind, 'success')
+  assert.equal(readProfile(session), undefined)
+  assert.match(run('').text, /Available: deepseek, glm/)
+})
+
+test('the profile projection follows selections and resets with the preset', () => {
+  const projection = profileProjection()
+  let state = projection.init()
+  assert.equal(projection.wire.viewSchema.parse(state), null)
+  state = projection.apply(state, { type: 'plugin:dsh-aio-agent/profile', data: { name: 'deepseek' } })
+  assert.deepEqual(projection.stateSchema.parse(state), { name: 'deepseek' })
+  state = projection.apply(state, { type: 'plugin:dsh-aio-agent/profile', data: { cleared: true } })
+  assert.equal(state, null)
+  state = projection.apply(state, { type: 'plugin:dsh-aio-agent/profile', data: { name: 'glm' } })
+  state = projection.apply(state, { type: 'agent-preset/selected', data: { agentPreset: 'aio-claude-code' } })
+  assert.equal(state, null)
+})
+
+test('the profiles route lists Claude Code profiles and the session pick', async (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify([{ name: 'deepseek', env: { ANTHROPIC_BASE_URL: 'https://a.example' } }]) }))
+  t.after(withdraw)
+  const events = [{ type: 'plugin:dsh-aio-agent/profile', data: { name: 'deepseek' } }]
+  const ctx = {
+    sessions: { get: (id) => (id === 's1' ? fakeSession(events) : undefined) },
+    sessionProjections: { stateOf: () => 'aio-claude-code' },
+  }
+  const listed = await (await serveProfiles(ctx, { url: 'http://localhost/api/aio-agent/profiles?sessionId=s1' })).json()
+  assert.deepEqual(listed, { profiles: [{ name: 'deepseek', baseUrl: 'https://a.example' }], active: 'deepseek' })
+  const other = { ...ctx, sessionProjections: { stateOf: () => 'aio-codex' } }
+  assert.deepEqual(await (await serveProfiles(other, { url: 'http://localhost/api/aio-agent/profiles?sessionId=s1' })).json(), { profiles: [], active: null })
 })

@@ -49,8 +49,9 @@ Type `/` to run a skill from this workspace or your home directory. Skills are r
 - **Default model**: used until a session picks a model.
 - **Launch command**: replaces the built-in executable, e.g. `"/opt/Cursor Agent/cursor-agent"` or `/opt/codex --profile work`; options after it are kept. Quote paths that contain spaces.
 - **Approve permission requests**: answers the requests the agent sends before acting, such as running a command. On approves, off declines. Actions the agent takes without asking follow its own settings.
+- **API profiles** (Claude Code): named sets of environment variables such as `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and the `ANTHROPIC_DEFAULT_*_MODEL` defaults. The same page is also available from **Settings → API profiles**. Each session picks one from the profile bar above the composer, or resets to its own settings. A profile is passed as a temporary `--settings` file for each turn, so it overrides `~/.claude/settings.json` without editing it. Switching the profile starts a new CLI session: the previous chat id belongs to another endpoint.
 
-Saved values go to the profile's `cordis.patch.yml` and apply from the next turn, without a reload.
+Saved values go to the profile's `cordis.patch.yml` and apply from the next turn, without a reload. Tokens in API profiles are stored there in clear text, like the CLI's own configuration.
 
 ## Session log
 

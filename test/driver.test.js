@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { provideLaunch } from '../lib/backends.js'
+import { handleProfile } from '../lib/driver.js'
 import { readBinding } from '../lib/sessions.js'
 import { agentRuntime, userMessage, waitFor } from './helpers/agent-runtime.mjs'
 
@@ -271,4 +272,28 @@ test('a missing print executable fails the turn without leaving a pending child'
   await agent.whenIdle()
   assert.equal(agent.status, 'idle')
   assert.match(errors[0].message, /command not found/)
+})
+
+test('claude-code runs the next turn with the selected API profile as --settings', { timeout: 15000 }, async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'aio-profile-'))
+  const profiles = JSON.stringify([{ name: 'deepseek', env: { ANTHROPIC_BASE_URL: 'https://a.example', ANTHROPIC_AUTH_TOKEN: 'sk-test' } }])
+  const withdraw = provideLaunch('claude-code', () => ({ command: [process.execPath, fixture, '--mock-dialect', 'claude'], permission: 'deny', profiles }))
+  const runtime = await agentRuntime(t, { backend: 'claude-code', cwd })
+  t.after(async () => { withdraw(); await rm(cwd, { recursive: true, force: true }) })
+  const result = handleProfile({
+    session: runtime.agent.session,
+    backendId: 'claude-code',
+    rawInput: 'deepseek',
+    record: (type, data) => runtime.agent.session.append(type, data),
+  })
+  assert.equal(result.kind, 'success')
+  assert.equal(readBinding(runtime.agent.session), undefined)
+  runtime.agent.followup(userMessage('hi'))
+  await runtime.agent.whenIdle()
+  const calls = (await readFile(join(cwd, 'calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  const call = calls.find((entry) => entry.prompt === 'hi')
+  const at = call.args.indexOf('--settings')
+  assert.ok(at > 0, JSON.stringify(call.args))
+  assert.deepEqual(call.settings, { env: { ANTHROPIC_BASE_URL: 'https://a.example', ANTHROPIC_AUTH_TOKEN: 'sk-test' } })
+  await assert.rejects(stat(call.args[at + 1]), { code: 'ENOENT' })
 })

@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 globalThis.window = { __ModuleLoader__: { load: (definition) => { globalThis.loaded = definition } } }
 await import('../lib/client.js')
-const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, errorActionCopy, skillCatalog, skillRows, skillSearch } = globalThis.loaded.factory(() => ({}))
+const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, profileDraft, profileText, errorActionCopy, skillCatalog, skillRows, skillSearch } = globalThis.loaded.factory(() => ({}))
 const css = labelCss()
 const rules = css.split('\n').map((rule) => ({ selectors: rule.slice(0, rule.indexOf('{')).split(','), body: rule.slice(rule.indexOf('{')) }))
 
@@ -271,4 +271,16 @@ test('resume rows group the current workspace first and mark the bound session',
   assert.equal(parseResumeText('Pick a session from /resume, or pass a session id.'), null)
   assert.deepEqual(errorActionCopy(true), { copy: '复制 Trace', copied: '已复制 Trace', issue: '提交 Issue' })
   assert.deepEqual(errorActionCopy(false), { copy: 'Copy Trace', copied: 'Trace copied', issue: 'Report Issue' })
+})
+
+test('profile drafts survive blank and hand-edited fields', () => {
+  assert.deepEqual(profileDraft(''), [])
+  assert.deepEqual(profileDraft('not json'), [])
+  assert.deepEqual(profileDraft('{"name":"x"}'), [])
+  assert.deepEqual(profileDraft('[{"name":"glm","env":{"A":"b"}},{"name":null}]'), [
+    { name: 'glm', env: { A: 'b' } },
+    { name: '', env: {} },
+  ])
+  assert.equal(profileText([]), '')
+  assert.deepEqual(JSON.parse(profileText([{ name: 'glm', env: { A: 'b' } }])), [{ name: 'glm', env: { A: 'b' } }])
 })
