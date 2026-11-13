@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 globalThis.window = { __ModuleLoader__: { load: (definition) => { globalThis.loaded = definition } } }
 await import('../lib/client.js')
-const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, errorActionCopy } = globalThis.loaded.factory(() => ({}))
+const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, errorActionCopy, skillCatalog, skillRows, skillSearch } = globalThis.loaded.factory(() => ({}))
 const css = labelCss()
 const rules = css.split('\n').map((rule) => ({ selectors: rule.slice(0, rule.indexOf('{')).split(','), body: rule.slice(rule.indexOf('{')) }))
 
@@ -225,6 +225,24 @@ test('host preset descriptions and turn errors read in Chinese and keep English 
   assert.equal(mismatch.agent, undefined)
   assert.match(hostText('OpenCode models run only in the OpenCode agent preset; choose it from the mode menu or pick another model', true).text, /^OpenCode 的模型只能在 OpenCode 模式下使用/)
   assert.equal(hostText('something else', true), undefined)
+})
+
+test('plugin skills are namespaced and search covers names and descriptions', () => {
+  const catalog = skillCatalog([
+    { name: 'wiki-search', source: 'plugin:nps-rd2@local' },
+    { name: 'review', source: 'project:.claude/skills' },
+  ])
+  const rows = skillRows([
+    { name: 'review', description: 'Review a diff' },
+    { name: 'wiki-search', description: 'Search Confluence' },
+  ], catalog)
+  assert.deepEqual(rows.map((row) => row.name), ['review', 'nps-rd2:wiki-search'])
+  assert.equal(rows[1].description, '(nps-rd2) Search Confluence')
+  assert.deepEqual(skillSearch(rows, 'nps').map((row) => row.name), ['nps-rd2:wiki-search'])
+  assert.deepEqual(skillSearch(rows, 'diff').map((row) => row.name), ['review'])
+  assert.deepEqual(skillSearch(rows, 'confluence').map((row) => row.name), ['nps-rd2:wiki-search'])
+  assert.deepEqual(skillSearch(rows, 'review').map((row) => row.name), ['review'])
+  assert.equal(skillSearch(rows, ''), rows)
 })
 
 test('resume rows group the current workspace first and mark the bound session', () => {

@@ -37,7 +37,7 @@ dsh plugin add github:cocofhu/dsh-aio-agent
 
 对话上下文保存在 CLI 一侧：之后每一轮都续接第一轮建立的 CLI 会话，DSH 重启后也一样。
 
-在输入框键入 `/`，可以调用当前工作区或用户目录里已有的技能。扫描范围包括 `.dsh/skills`、`.agents/skills`、`.claude/skills`、`.claude/commands`、`.cursor/skills`、`.codex/skills`、`.opencode/skills`、`.codebuddy/skills` 和 `.kimi/skills`（先项目，再主目录下的同名目录）。选中 `/技能名` 后，胶囊会高亮，右侧栏打开对应的 `SKILL.md`。发送时会把技能说明注入给 CLI，因此一个 Agent 也能用到它自己不会扫描的目录里的技能。CLI 用自己的 Skill 工具加载技能时，对话里显示为可展开的原生技能卡片。
+在输入框键入 `/`，可以调用当前工作区或用户目录里已有的技能。扫描范围包括 `.dsh/skills`、`.agents/skills`、`.claude/skills`、`.claude/commands`、`.cursor/skills`、`.codex/skills`、`.opencode/skills`、`.codebuddy/skills` 和 `.kimi/skills`（先项目，再主目录下的同名目录），以及本用户或当前工作区启用的 Claude Code、Codex 插件的技能。插件技能显示为 `/插件名:技能名`，输入时会同时匹配名称和描述。选中 `/技能名` 后，胶囊会高亮，右侧栏打开对应的 `SKILL.md`。发送时会把技能说明注入给 CLI，因此一个 Agent 也能用到它自己不会扫描的目录里的技能。CLI 用自己的 Skill 工具加载技能时，对话里显示为可展开的原生技能卡片。
 
 `/resume` 续接本机已经存在的 CLI 会话。弹窗先列出当前工作区，再列出其他工作区，每条包含标题、时间和短 ID。也可以直接输入 `/resume <会话 ID>`。之后的轮次会把这个 ID 交给 CLI（`--resume`、`codex exec resume`、`opencode run --session`，Kimi Code 则用 ACP 的 `session/load`）。DSH 保留自己的对话记录，不会把 CLI 的历史整段导入。续接之后，对话里会出现一张续接卡片，输入框上方会一直显示「正在续接」和会话标题，侧边栏标题也会改成它。
 

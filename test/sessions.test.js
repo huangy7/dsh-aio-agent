@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { handleResume } from '../lib/driver.js'
-import { bindingProjection, buildDiagnosticTrace, serveSessions, serveTrace } from '../lib/index.js'
+import { bindingProjection, buildDiagnosticTrace, serveSessions, serveSkills, serveTrace } from '../lib/index.js'
 import { cursorWorkspaceHash, escapeProjectDir, foldClaudeTranscript, foldCodebuddyTranscript, isSessionId, listBackendSessions, parseCodexIndex, parseOpenCodeList, readBinding } from '../lib/sessions.js'
 
 test('project directories and the Cursor workspace hash follow each CLI', () => {
@@ -208,6 +208,30 @@ test('the binding projection keeps a title when a later turn records the same id
   assert.equal(state, null)
   state = projection.apply(state, { type: 'session/title', data: { title: 'ignored' } })
   assert.equal(state, null)
+})
+
+test('the skills route reports every scanned skill with its origin', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'aio-skills-route-'))
+  const cwd = join(home, 'project')
+  try {
+    await mkdir(join(cwd, '.git'), { recursive: true })
+    await mkdir(join(cwd, '.claude/skills/review'), { recursive: true })
+    await writeFile(join(cwd, '.claude/skills/review/SKILL.md'), '---\nname: review\ndescription: Review a diff\n---\nReview body\n')
+    await mkdir(join(home, '.claude/skills/mine'), { recursive: true })
+    await writeFile(join(home, '.claude/skills/mine/SKILL.md'), '---\nname: mine\ndescription: Personal skill\n---\nMine body\n')
+    const session = { header: { cwd } }
+    const ctx = { aioHome: home, sessions: { get: (id) => (id === 's1' ? session : undefined) } }
+    const missing = await serveSkills(ctx, { url: 'http://localhost/api/aio-agent/skills' })
+    assert.equal(missing.status, 400)
+    const absent = await serveSkills(ctx, { url: 'http://localhost/api/aio-agent/skills?sessionId=nope' })
+    assert.equal(absent.status, 404)
+    const body = await (await serveSkills(ctx, { url: 'http://localhost/api/aio-agent/skills?sessionId=s1' })).json()
+    assert.deepEqual(body.skills.map((skill) => skill.name).sort(), ['mine', 'review'])
+    assert.equal(body.skills.find((skill) => skill.name === 'review').source, 'project:.claude/skills')
+    assert.equal(body.skills.find((skill) => skill.name === 'mine').source, 'user:.claude/skills')
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
 })
 
 test('the sessions route lists the preset backend and reports the active id', async () => {
