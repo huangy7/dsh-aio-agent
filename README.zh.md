@@ -37,9 +37,11 @@ dsh plugin add github:cocofhu/dsh-aio-agent
 
 对话上下文保存在 CLI 一侧：之后每一轮都续接第一轮建立的 CLI 会话，DSH 重启后也一样。
 
-在输入框键入 `/`，可以调用当前工作区或用户目录里已有的技能。扫描范围包括 `.dsh/skills`、`.agents/skills`、`.claude/skills`、`.claude/commands`、`.cursor/skills`、`.codex/skills`、`.opencode/skills`、`.codebuddy/skills` 和 `.kimi/skills`（先项目，再主目录下的同名目录）。选中 `/技能名` 后，胶囊会高亮，右侧栏打开对应的 `SKILL.md`。发送时会把技能说明注入给 CLI，因此一个 Agent 也能用到它自己不会扫描的目录里的技能。CLI 用自己的 Skill 工具加载技能时，对话里显示为可展开的原生技能卡片。
+在输入框键入 `/`，可以调用当前工作区或用户目录里已有的技能。扫描范围包括 `.dsh/skills`、`.agents/skills`、`.claude/skills`、`.claude/commands`、`.cursor/skills`、`.codex/skills`、`.opencode/skills`、`.codebuddy/skills` 和 `.kimi/skills`（先项目，再主目录下的同名目录），以及本用户或当前工作区启用的 Claude Code、Codex 插件的技能。插件技能显示为 `/插件名:技能名`，输入时会同时匹配名称和描述。选中 `/技能名` 后，胶囊会高亮，右侧栏打开对应的 `SKILL.md`。发送时会把技能说明注入给 CLI，因此一个 Agent 也能用到它自己不会扫描的目录里的技能。CLI 用自己的 Skill 工具加载技能时，对话里显示为可展开的原生技能卡片。
 
 `/resume` 续接本机已经存在的 CLI 会话。弹窗先列出当前工作区，再列出其他工作区，每条包含标题、时间和短 ID。也可以直接输入 `/resume <会话 ID>`。之后的轮次会把这个 ID 交给 CLI（`--resume`、`codex exec resume`、`opencode run --session`，Kimi Code 则用 ACP 的 `session/load`）。DSH 保留自己的对话记录，不会把 CLI 的历史整段导入。续接之后，对话里会出现一张续接卡片，输入框上方会一直显示「正在续接」和会话标题，侧边栏标题也会改成它。
+
+Claude Code 模式还会通过当前 CLI 的初始化协议发现 `/simplify`、`/code-review`、`/update-config` 等内置技能，菜单支持按名称和描述搜索。发现过程不发送模型请求；内置技能的指令由 Claude 自己加载，不提供本地 `SKILL.md` 预览。
 
 ## 配置
 
@@ -49,8 +51,13 @@ dsh plugin add github:cocofhu/dsh-aio-agent
 - **默认模型**：会话未选择模型时使用。
 - **启动命令**：替换内置的可执行文件，例如 `"/opt/Cursor Agent/cursor-agent"` 或 `/opt/codex --profile work`，后面附加的选项会保留；含空格的路径要加引号。
 - **自动批准权限请求**：Agent 在执行操作前（如运行命令）发起请求时，开启则批准，关闭则拒绝。Agent 无需请求就能执行的操作，由它自身的设置决定。
+- **API 配置**（Claude Code）：从 **设置 → API 配置** 或插件页管理可搜索的配置列表与独立的 **连接**（URL、API Key）。多个配置可引用同一连接，并分别设置 Sonnet、Opus、Haiku 和默认模型的实际 ID 与显示名称。点击 **获取模型列表** 从连接读取可用模型，手动填写的显示名称优先。会话中的配置选择器位于输入框底部、模型按钮旁边；切换或修改配置从下一轮生效，并通过原来的 `--resume` 继续当前 CLI 会话。每轮用临时 `--settings` 文件传入配置，不改动 `~/.claude/settings.json`。旧配置自动迁移，共享连接的 URL 和 Key 只需维护一次。
 
-保存的值写入 profile 的 `cordis.patch.yml`，从下一轮开始生效，无需重新加载。
+保存的值写入 profile 的 `cordis.patch.yml`，从下一轮开始生效，无需重新加载。API 配置里的 token 在该文件中以明文保存，与 CLI 自身的配置相同。
+
+Claude 配置还支持推理强度、API 超时、最大输出 token 数、Beta 与流量开关、权限模式，以及 Commit/PR 署名。每个 DSH 会话首次成功启动时，将完整的用户、项目、项目 local 设置及支持的环境变量保存为独立快照，位于 `~/.dsh/aio-agent/session-settings`。后续每轮在这份基线之上应用当前配置；字段可选择继承快照或清除继承值、使用 CLI 默认值，空署名表示禁用署名。修改配置保留原 CLI 会话 ID，不改动全局设置文件；Claude 的托管策略仍然生效。
+
+Claude 的 `AskUserQuestion` 会在 App 中显示提问，选择项与自定义答案会交回当前正在运行的 CLI，即使开启完全权限也可使用。停止当前轮次会取消待回答的提问。仍然每轮启动一个进程，下一轮通过 `--resume` 续接原会话。
 
 ## 会话日志
 

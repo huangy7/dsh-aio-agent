@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { renderSkillContent } from '@deepseek-ai/dsh-skill'
 import { discoverSkills, loadSkill, parseSkillDocument, renderInjectedSkill, skillNameFrom, withSkillMessages } from '../lib/skills.js'
@@ -11,9 +11,10 @@ async function fixture() {
   const project = join(root, 'project')
   const home = join(root, 'home')
   const write = async (path, body) => {
-    await mkdir(join(root, path, '..'), { recursive: true })
-    await writeFile(join(root, path), body)
+    await mkdir(resolve(root, path, '..'), { recursive: true })
+    await writeFile(resolve(root, path), body)
   }
+  const cache = (id) => join(home, '.claude/plugins/cache', id)
   await write('project/.git', '')
   await write('project/pkg/.keep', '')
   await write('project/.dsh/skills/shared/SKILL.md', '---\nname: shared\ndescription: from dsh\n---\nDSH body\n')
@@ -27,6 +28,44 @@ async function fixture() {
   await write('home/.dsh/skills/.system/hidden/SKILL.md', '---\nname: hidden\ndescription: bundled\n---\nnope\n')
   await write('home/.dsh/skills/global-note/SKILL.md', '---\nname: global-note\ndescription: from home\n---\nHome body\n')
   await write('home/.claude/skills/home-only/SKILL.md', '---\nname: Home Only\ndescription: user skill\n---\nUser body\n')
+  await write('home/.claude/plugins/installed_plugins.json', JSON.stringify({
+    version: 2,
+    plugins: {
+      'demo@local': [{ scope: 'user', installPath: cache('demo') }],
+      'off@local': [{ scope: 'user', installPath: cache('off') }],
+      'moved@local': [{ scope: 'user', installPath: cache('moved') }],
+      'proj@local': [{ scope: 'project', installPath: cache('proj') }],
+      'other@local': [{ scope: 'project', installPath: cache('other') }],
+      'multi@local': [
+        { scope: 'project', installPath: cache('multi-old'), lastUpdated: '2026-01-01T00:00:00Z' },
+        { scope: 'user', installPath: cache('multi-new'), lastUpdated: '2026-02-01T00:00:00Z' },
+      ],
+      'localon@local': [{ scope: 'user', installPath: cache('localon') }],
+    },
+  }))
+  await write('home/.claude/settings.json', JSON.stringify({ enabledPlugins: { 'demo@local': true, 'off@local': false, 'moved@local': true, 'other@local': true } }))
+  await write('project/.claude/settings.json', JSON.stringify({ enabledPlugins: { 'proj@local': true, 'multi@local': true } }))
+  await write('project/.claude/settings.local.json', JSON.stringify({ enabledPlugins: { 'localon@local': true } }))
+  await write(join(cache('demo'), 'skills/plugged/SKILL.md'), '---\nname: plugged\ndescription: from plugin\n---\nPlugin body\n')
+  await write(join(cache('off'), 'skills/offplug/SKILL.md'), '---\nname: offplug\ndescription: disabled plugin\n---\nOff body\n')
+  await write(join(cache('moved'), '.claude-plugin/plugin.json'), '{"skills": ["./custom/skills"]}')
+  await write(join(cache('moved'), 'custom/skills/moved-skill/SKILL.md'), '---\nname: moved-skill\ndescription: declared path\n---\nMoved body\n')
+  await write(join(cache('proj'), 'skills/proj-skill/SKILL.md'), '---\nname: proj-skill\ndescription: project plugin\n---\nProj body\n')
+  await write(join(cache('other'), 'skills/other-skill/SKILL.md'), '---\nname: other-skill\ndescription: other workspace plugin\n---\nOther body\n')
+  await write(join(cache('multi-old'), 'skills/old-version/SKILL.md'), '---\nname: old-version\ndescription: stale install\n---\nOld body\n')
+  await write(join(cache('multi-new'), 'skills/new-version/SKILL.md'), '---\nname: new-version\ndescription: newest install\n---\nNew body\n')
+  await write(join(cache('localon'), 'skills/local-skill/SKILL.md'), '---\nname: local-skill\ndescription: enabled in local settings\n---\nLocal body\n')
+  const codexCache = (id) => join(home, '.codex/plugins/cache/local', id, '2.0.0')
+  await write('home/.codex/config.toml', [
+    '[plugins."demo-codex@local"]',
+    'enabled = true',
+    '[plugins."off-codex@local"]',
+    'enabled = false',
+    '',
+  ].join('\n'))
+  await write(join(codexCache('demo-codex'), '.codex-plugin/plugin.json'), '{"skills":"./skills/"}')
+  await write(join(codexCache('demo-codex'), 'skills/codex-skill/SKILL.md'), '---\nname: codex-skill\ndescription: from codex plugin\n---\nCodex body\n')
+  await write(join(codexCache('off-codex'), 'skills/codex-off/SKILL.md'), '---\nname: codex-off\ndescription: disabled codex plugin\n---\nOff body\n')
   return { root, project, home, cwd: join(project, 'pkg') }
 }
 
@@ -61,6 +100,17 @@ test('project and user skill directories are discovered, with the higher-priorit
     assert.equal(byName.changelog.whenToUse, 'When the user asks for a changelog')
     assert.equal(byName['global-note'].source, 'user:.dsh/skills')
     assert.equal(byName['home-only'].description, 'user skill')
+    assert.equal(byName.plugged.description, 'from plugin')
+    assert.equal(byName.plugged.source, 'plugin:demo@local')
+    assert.equal(byName['moved-skill'].description, 'declared path')
+    assert.equal(byName['proj-skill'].description, 'project plugin')
+    assert.equal(byName['new-version'].description, 'newest install')
+    assert.equal(byName['local-skill'].description, 'enabled in local settings')
+    assert.equal(byName['codex-skill'].source, 'plugin:demo-codex@local')
+    assert.equal(byName['codex-off'], undefined)
+    assert.equal(byName['old-version'], undefined)
+    assert.equal(byName['other-skill'], undefined)
+    assert.equal(byName.offplug, undefined)
     assert.equal(byName.quiet.invocation.userInvocable, false)
     assert.equal(byName.hidden, undefined)
     const loaded = await loadSkill(byName.review)
@@ -85,6 +135,8 @@ test('an explicit /skill-name appends skill_content without rewriting the user m
   const out = await withSkillMessages(skills, messages, { cwd: '/work' })
   assert.equal(out[0], messages[0])
   assert.equal(out[1].content[0].text, renderSkillContent(skill))
+  const namespaced = await withSkillMessages(skills, [{ role: 'user', content: [{ type: 'text', text: '/nps-rd2:review the patch' }] }])
+  assert.equal(namespaced[1].content[0].text, renderSkillContent(skill))
   assert.equal(renderInjectedSkill(skill), renderSkillContent(skill))
   const quiet = { ...skill, name: 'quiet', invocation: { modelInvocable: true, userInvocable: false } }
   const skipped = await withSkillMessages({ async get() { return quiet } }, [{ role: 'user', content: [{ type: 'text', text: '/quiet' }] }])

@@ -37,9 +37,11 @@ An agent that is not installed or not signed in stays out of the model selector 
 
 The CLI keeps its own conversation context: each turn resumes the CLI session the first turn started, also after a DSH restart.
 
-Type `/` to run a skill from this workspace or your home directory. Skills are read from `.dsh/skills`, `.agents/skills`, `.claude/skills`, `.claude/commands`, `.cursor/skills`, `.codex/skills`, `.opencode/skills`, `.codebuddy/skills` and `.kimi/skills` (project, then the same directories under your home directory). Choosing `/skill-name` highlights the chip and opens its `SKILL.md` in the sidebar. Sending it includes the skill instructions in the prompt the CLI receives, including for an agent that does not scan that directory itself. A skill the CLI loads with its own Skill tool shows as the native expandable skill card.
+Type `/` to run a skill from this workspace or your home directory. Skills are read from `.dsh/skills`, `.agents/skills`, `.claude/skills`, `.claude/commands`, `.cursor/skills`, `.codex/skills`, `.opencode/skills`, `.codebuddy/skills` and `.kimi/skills` (project, then the same directories under your home directory), plus the skills of every Claude Code or Codex plugin enabled for this user or workspace. Plugin skills are listed as `/plugin:skill`, and typing matches both names and descriptions. Choosing `/skill-name` highlights the chip and opens its `SKILL.md` in the sidebar. Sending it includes the skill instructions in the prompt the CLI receives, including for an agent that does not scan that directory itself. A skill the CLI loads with its own Skill tool shows as the native expandable skill card.
 
 `/resume` continues a CLI session that already exists on this machine. The popup lists the current workspace first, then other workspaces, with the title, time and a short id. `/resume <session-id>` binds that id directly. Later turns pass it to the CLI (`--resume`, `codex exec resume`, `opencode run --session`, or ACP `session/load` for Kimi Code). DSH keeps its own transcript; it does not copy the CLI's history. After a resume, the transcript shows a resume card, a bar above the composer stays visible with that session's title, and the sidebar title changes to it.
+
+The Claude Code preset also discovers native skills such as `/simplify`, `/code-review` and `/update-config` through the configured CLI's initialization protocol. Search matches their names and descriptions. Discovery submits no model prompt; Claude loads the native instructions itself, and these entries have no local `SKILL.md` preview.
 
 ## Configure
 
@@ -49,8 +51,13 @@ Type `/` to run a skill from this workspace or your home directory. Skills are r
 - **Default model**: used until a session picks a model.
 - **Launch command**: replaces the built-in executable, e.g. `"/opt/Cursor Agent/cursor-agent"` or `/opt/codex --profile work`; options after it are kept. Quote paths that contain spaces.
 - **Approve permission requests**: answers the requests the agent sends before acting, such as running a command. On approves, off declines. Actions the agent takes without asking follow its own settings.
+- **API profiles** (Claude Code): manage searchable profiles and reusable **Connections** (URL and API key) from **Settings → API profiles** or the Claude Code plugin page. Each profile selects a connection and maps Sonnet, Opus, Haiku and the default model to an actual model ID and an optional display name. **Get model list** fetches available IDs and names from the connection; manual display names take priority. The compact profile selector sits beside the model selector inside the composer. Changes apply on the next turn while continuing the existing CLI session with `--resume`. Each turn receives a temporary `--settings` file, leaving `~/.claude/settings.json` intact. Existing profiles migrate automatically; profiles using the same connection share its URL and key.
 
-Saved values go to the profile's `cordis.patch.yml` and apply from the next turn, without a reload.
+Saved values go to the profile's `cordis.patch.yml` and apply from the next turn, without a reload. Tokens in API profiles are stored there in clear text, like the CLI's own configuration.
+
+Claude profiles also provide effort, API timeout, maximum output tokens, beta and traffic controls, permission mode, and commit/PR attribution. On its first successful launch, each DSH session captures the complete inherited user/project/local settings and supported environment variables in a private snapshot under `~/.dsh/aio-agent/session-settings`. Each turn overlays the current profile onto that baseline. Fields can inherit the snapshot or clear the inherited setting to use the CLI default; empty attribution suppresses it. Changing profiles preserves the CLI session ID. Global settings files stay unchanged; managed Claude policies still apply.
+
+Claude's `AskUserQuestion` appears as a question in the App. Selected options and custom answers return to the same running CLI turn, including in full-permission mode. Stopping the turn cancels a pending question. Claude still runs one process per turn and resumes its session on the next turn.
 
 ## Session log
 

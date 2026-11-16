@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { readFile } from 'node:fs/promises'
+import { runInNewContext } from 'node:vm'
 
 globalThis.window = { __ModuleLoader__: { load: (definition) => { globalThis.loaded = definition } } }
 await import('../lib/client.js')
-const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, errorActionCopy } = globalThis.loaded.factory(() => ({}))
+const { labelCss, modeView, presetCss, compactModels, setupText, hostText, resumeChoices, parseResumeText, profileDraft, profileText, errorActionCopy, skillCatalog, skillRows, skillSearch, paintSlashIcons } = globalThis.loaded.factory(() => ({}))
 const css = labelCss()
 const rules = css.split('\n').map((rule) => ({ selectors: rule.slice(0, rule.indexOf('{')).split(','), body: rule.slice(rule.indexOf('{')) }))
 
@@ -157,6 +159,35 @@ test('load answers the narrowed menu', async () => {
   assert.deepEqual(ids(await v.load()), ['aio-opencode'])
 })
 
+test('Claude model names follow the active session profile and update on edits', () => {
+  const fake = fakeDirectory({ provider: 'aio-claude-code', model: 'sonnet' })
+  fake.directory.store.getSnapshot().groups = [{ id: 'aio-claude-code', models: [
+    { id: 'default', name: 'Claude Code default' }, { id: 'sonnet', name: 'Claude Sonnet (latest)' },
+  ] }]
+  let profile = { models: [{ id: 'default', name: 'Gateway default' }, { id: 'sonnet', name: 'DeepSeek V4.1', description: 'deepseek-v4.1-flash' }] }
+  const listeners = new Set()
+  const source = { getSnapshot: () => profile, subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)) }
+  const v = modeView(fake.directory, () => 'aio-claude-code', () => () => {}, undefined, source)
+  const stop = v.store.subscribe(() => {})
+  assert.equal(v.store.getSnapshot().groups[0].models[1].name, 'DeepSeek V4.1')
+  assert.deepEqual(v.store.getSnapshot().current, { provider: 'aio-claude-code', model: 'sonnet' })
+  profile = { models: [{ id: 'default', name: 'Gateway default' }, { id: 'sonnet', name: 'My display name' }] }
+  for (const listener of listeners) listener()
+  assert.equal(v.store.getSnapshot().groups[0].models[1].name, 'My display name')
+  profile = null
+  for (const listener of listeners) listener()
+  assert.equal(v.store.getSnapshot().groups[0].models[1].name, 'Claude Sonnet (latest)')
+  stop()
+})
+
+test('switching Claude profile clears the previous model context window', () => {
+  const fake = fakeDirectory({ provider: 'aio-claude-code', model: 'sonnet' })
+  fake.directory.store.getSnapshot().groups = [{ id: 'aio-claude-code', models: [{ id: 'sonnet', name: 'Old', context: { contextWindow: 1000000 } }] }]
+  const profile = { models: [{ id: 'sonnet', name: 'New model' }] }
+  const v = modeView(fake.directory, () => 'aio-claude-code', () => () => {}, undefined, { getSnapshot: () => profile, subscribe: () => () => {} })
+  assert.equal(v.store.getSnapshot().groups[0].models[0].context, undefined)
+})
+
 const CURSOR = [
   { id: 'auto', name: 'Auto' },
   { id: 'claude-opus-5-5-low', name: 'Claude Opus 5.5 1M Low' },
@@ -227,6 +258,99 @@ test('host preset descriptions and turn errors read in Chinese and keep English 
   assert.equal(hostText('something else', true), undefined)
 })
 
+test('plugin skills are namespaced and search covers names and descriptions', () => {
+  const catalog = skillCatalog([
+    { name: 'wiki-search', source: 'plugin:nps-rd2@local' },
+    { name: 'review', source: 'project:.claude/skills' },
+  ])
+  const rows = skillRows([
+    { name: 'review', description: 'Review a diff' },
+    { name: 'wiki-search', description: 'Search Confluence' },
+  ], catalog)
+  assert.deepEqual(rows.map((row) => row.name), ['review', 'nps-rd2:wiki-search'])
+  assert.equal(rows[1].description, '(nps-rd2) Search Confluence')
+  assert.deepEqual(skillSearch(rows, 'nps').map((row) => row.name), ['nps-rd2:wiki-search'])
+  assert.deepEqual(skillSearch(rows, 'diff').map((row) => row.name), ['review'])
+  assert.deepEqual(skillSearch(rows, 'confluence').map((row) => row.name), ['nps-rd2:wiki-search'])
+  assert.deepEqual(skillSearch(rows, 'review').map((row) => row.name), ['review'])
+  assert.equal(skillSearch(rows, ''), rows)
+})
+
+for (const warmupFails of [false, true]) test(`plugin references remain filterable and clickable (${warmupFails ? 'warmup request fails' : 'warmup succeeds'})`, async (t) => {
+  // Exercise the installed DSH source: it resolves previews by the original catalog name.
+  let definition
+  const hostCode = await readFile(new URL(import.meta.resolve('@deepseek-ai/dsh-client-ui-skill/client')), 'utf8')
+  runInNewContext(hostCode, {
+    window: { __ModuleLoader__: { load: (value) => { definition = value } } },
+    AbortController, console,
+  })
+  const host = definition.factory((name) => name === '@deepseek-ai/dsh-client-ui-primitives'
+    ? { rankByName: (items, query) => items.filter((item) => item.name.includes(query)) } : {})
+  const session = { sessionId: 'test-session' }
+  const catalog = [
+    { name: 'create-pr', description: 'Create PR', path: '/plugins/nps-rd2/skills/create-pr/SKILL.md' },
+    { name: 'review', description: 'Review', path: '/workspace/.agents/skills/review/SKILL.md' },
+  ]
+  const sources = []
+  const effects = []
+  const opened = []
+  const invalidators = new Map()
+  const subscribe = (event, listener) => { invalidators.set(event, listener); return () => invalidators.delete(event) }
+  const triggers = { live: { sources }, registerSource: (source) => { sources.push(source); return () => {} } }
+  const stop = paintSlashIcons({ get: () => triggers, remote: { $on: subscribe }, on: subscribe })
+  t.after(stop)
+  let requests = 0
+  let commands = [{ name: 'simplify', description: 'Clean up changed code' }]
+  t.mock.method(globalThis, 'fetch', async () => warmupFails && requests++ === 0
+    ? Response.json({ error: 'session not found' }, { status: 404 }) : Response.json({ skills: [
+    { name: 'create-pr', source: 'plugin:nps-rd2@local' },
+  ], commands }))
+  host.apply({
+    effect: (fn) => effects.push(fn()),
+    slots: { inject: () => {} },
+    locale: { register: () => () => {}, bind: () => () => '' },
+    remote: { skills: { list: async () => ({ ok: true, value: { skills: catalog } }) }, $on: () => {} },
+    sessions: { subagentAddress: () => undefined, list: { getSnapshot: () => ({ byId: { 'test-session': { cwd: '/workspace' } } }) } },
+    sidebarRight: { openResource: (address) => opened.push(address) },
+    get: () => triggers, on: () => {},
+  })
+  t.after(() => effects.forEach((off) => off?.()))
+  const source = sources[0]
+  let decorated = []
+  const off = source.subscribeLexicon(session, () => { decorated = [...(source.lexicon(session) ?? [])] })
+  t.after(off)
+  source.warm(session)
+  await new Promise((resolve) => setImmediate(resolve))
+  if (!warmupFails) assert.ok(decorated.includes('nps-rd2:create-pr'), 'warmup must notify the editor of plugin reference names')
+  const filtered = await source.candidates(session, { query: 'nps-rd2', signal: new AbortController().signal })
+  assert.deepEqual(filtered.map((row) => row.name), ['nps-rd2:create-pr'])
+  const native = await source.candidates(session, { query: 'sim', signal: new AbortController().signal })
+  assert.deepEqual(native.map((row) => row.name), ['simplify'])
+  assert.equal(source.onPick({ session, candidate: native[0] }).text, '/simplify ')
+  assert.ok(source.lexicon(session).includes('simplify'))
+  const rows = await source.candidates(session, { query: 'nps-rd2:create-pr', signal: new AbortController().signal })
+  const picked = source.onPick({ session, candidate: rows[0] })
+  assert.deepEqual(picked, { insert: { source: 'skill', ref: '/nps-rd2:create-pr', label: '/nps-rd2:create-pr', clipboardText: '/nps-rd2:create-pr' } })
+  assert.deepEqual(source.matchSpace(session, '/nps-rd2:create-pr'), picked)
+  assert.equal(source.matchSpace(session, '/another:create-pr'), undefined)
+  assert.equal(source.codec.clipboardText(picked.insert.ref), '/nps-rd2:create-pr')
+  assert.equal(await source.codec.serialize(picked.insert.ref, new AbortController().signal), '/nps-rd2:create-pr')
+  assert.equal(source.onPick({ session, candidate: { name: 'review' } }).text, '/review ')
+  assert.equal(source.openReference(session, { ref: '/nps-rd2:create-pr' }), true)
+  assert.equal(opened[0], 'dsh-resource://file/session/test-session//plugins/nps-rd2/skills/create-pr/SKILL.md')
+  assert.equal(source.openReference(session, { ref: '/review' }), true)
+  assert.equal(opened[1], 'dsh-resource://file/session/test-session/.agents/skills/review/SKILL.md')
+  assert.equal(source.openReference(session, { ref: '/another:create-pr' }), false)
+  commands = []
+  invalidators.get('agent-preset/selected')(session.sessionId)
+  const switched = await source.candidates(session, { query: 'sim', signal: new AbortController().signal })
+  assert.deepEqual(switched, [], 'Claude builtins must disappear after switching presets')
+  stop()
+  assert.equal(source.codec, undefined)
+  assert.equal(source.matchSpace, undefined)
+  assert.equal(source.onPick({ session, candidate: { name: 'create-pr' } }).text, '/create-pr ')
+})
+
 test('resume rows group the current workspace first and mark the bound session', () => {
   const rows = resumeChoices([
     { id: 'other-session', title: 'Elsewhere', updatedAt: Date.parse('2026-01-02T00:00:00Z'), currentWorkspace: false },
@@ -253,4 +377,138 @@ test('resume rows group the current workspace first and mark the bound session',
   assert.equal(parseResumeText('Pick a session from /resume, or pass a session id.'), null)
   assert.deepEqual(errorActionCopy(true), { copy: '复制 Trace', copied: '已复制 Trace', issue: '提交 Issue' })
   assert.deepEqual(errorActionCopy(false), { copy: 'Copy Trace', copied: 'Trace copied', issue: 'Report Issue' })
+})
+
+test('profile drafts survive blank and hand-edited fields', () => {
+  assert.deepEqual(profileDraft(''), [])
+  assert.deepEqual(profileDraft('not json'), [])
+  assert.deepEqual(profileDraft('{"name":"x"}'), [])
+  assert.deepEqual(profileDraft('[{"name":"glm","env":{"A":"b"}},{"name":null}]'), [
+    { name: 'glm', env: { A: 'b' } },
+    { name: '', env: {} },
+  ])
+  assert.equal(profileText([]), '')
+  assert.deepEqual(JSON.parse(profileText([{ name: 'glm', env: { A: 'b' } }])), [{ name: 'glm', env: { A: 'b' } }])
+})
+
+test('browser and Host use the same profile migration and validation', async (t) => {
+  globalThis.document = { documentElement: { lang: 'en' } }
+  t.after(() => { delete globalThis.document })
+  const host = await import('../lib/profile-config.js')
+  const client = globalThis.loaded.factory(() => ({}))
+  const legacy = '[{"name":"gateway","env":{"ANTHROPIC_BASE_URL":"https://api.example.test","ANTHROPIC_AUTH_TOKEN":"test-key","ANTHROPIC_DEFAULT_SONNET_MODEL":"deepseek-v4.1","EXTRA":"kept"}}]'
+  assert.deepEqual(client.profileDocument(legacy), host.profileDocument(legacy))
+  assert.equal(client.profileValidation(legacy), null)
+  assert.ok(client.profileValidation('{broken'))
+  assert.ok(client.profileValidation('{"version":2,"connections":[],"profiles":[{"id":"test","name":""}]}'))
+})
+
+test('profile catalog discards a stale response when save forces a fresh read', async (t) => {
+  const pending = []
+  t.mock.method(globalThis, 'fetch', (url, options) => new Promise((resolve) => pending.push({ url, options, resolve })))
+  const client = globalThis.loaded.factory(() => ({}))
+  const catalog = client.profileCatalog('catalog-race')
+  t.after(() => catalog.dispose())
+  const first = catalog.load()
+  const second = catalog.load(true)
+  assert.equal(pending.length, 2)
+  assert.equal(pending[0].options.signal.aborted, true)
+  pending[1].resolve(Response.json({ profiles: [{ id: 'p', name: 'Saved profile' }] }))
+  await second
+  pending[0].resolve(Response.json({ profiles: [{ id: 'p', name: 'Old profile' }] }))
+  await first
+  assert.equal(catalog.store.getSnapshot().profiles[0].name, 'Saved profile')
+})
+
+test('default profile metadata reaches the model picker instead of the fixed Claude list', async (t) => {
+  const client = globalThis.loaded.factory(() => ({}))
+  const defaults = { models: [{ id: 'default', name: 'DeepSeek Flash' }, { id: 'sonnet', name: 'DeepSeek Flash' }] }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ profiles: [], defaults }))
+  const catalog = client.profileCatalog('default-profile')
+  t.after(() => catalog.dispose())
+  await catalog.load()
+  assert.deepEqual(catalog.store.getSnapshot().defaults, defaults)
+})
+
+test('configuration read errors retain the HTTP status for diagnosis', async (t) => {
+  globalThis.document = { documentElement: { lang: 'zh-CN' } }
+  t.after(() => { delete globalThis.document })
+  const client = globalThis.loaded.factory(() => ({}))
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ error: 'session not found' }, { status: 404 }))
+  const catalog = client.profileCatalog('error-diagnosis')
+  t.after(() => catalog.dispose())
+  await catalog.load()
+  assert.match(catalog.store.getSnapshot().error, /404/)
+})
+
+test('the desktop model directory uses defaults, then the selected API profile', async (t) => {
+  let definition
+  const defaults = { models: [{ id: 'default', name: 'Local DeepSeek' }, { id: 'sonnet', name: 'Local DeepSeek' }] }
+  const named = { id: 'work', name: 'Work', models: [{ id: 'default', name: 'Work GLM' }, { id: 'sonnet', name: 'Work GLM' }] }
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  runInNewContext(source.replace('exports.apply = apply;', 'exports.narrowModelMenu = narrowModelMenu;\nexports.apply = apply;'), {
+    window: { __ModuleLoader__: { load: (value) => { definition = value } } },
+    AbortController, Date, fetch: async () => Response.json({ profiles: [named], defaults }),
+  })
+  const fake = fakeDirectory({ provider: 'aio-claude-code', model: 'sonnet' })
+  fake.directory.store.getSnapshot().groups = [{ id: 'aio-claude-code', models: [{ id: 'sonnet', name: 'Fixed Claude' }] }]
+  const projections = { agentPreset: 'aio-claude-code' }
+  class ModelDirectoryResolver {
+    constructor() { this.ctx = { sessions: { list: { getSnapshot: () => ({ byId: { desktop: { projectionValues: projections } } }), subscribe: () => () => {} } } } }
+    directoryFor() { return fake.directory }
+  }
+  const client = definition.factory((name) => name === '@deepseek-ai/dsh-client-ui-model-selection' ? { ModelDirectoryResolver } : {})
+  t.after(client.narrowModelMenu())
+  const view = new ModelDirectoryResolver().directoryFor('desktop')
+  assert.equal(view.store.getSnapshot().groups[0].models.length, 0)
+  await view.load()
+  assert.equal(view.store.getSnapshot().groups[0].models[1].name, 'Local DeepSeek')
+  projections.aioProfile = { id: 'work', name: 'Work' }
+  assert.equal(view.store.getSnapshot().groups[0].models[1].name, 'Work GLM')
+  delete projections.aioProfile
+  assert.equal(view.store.getSnapshot().groups[0].models[1].name, 'Local DeepSeek')
+})
+
+test('API profile save waits for actual DSH writes before refreshing model names', async (t) => {
+  globalThis.document = { documentElement: { lang: 'en' } }
+  t.after(() => { delete globalThis.document })
+  // Use the installed DSH form: its public action save() returns void, while form.save() settles after the write.
+  let definition
+  const createSnapshotStore = (initial) => {
+    let value = initial
+    const listeners = new Set()
+    return { getSnapshot: () => value, set: (next) => { value = next; for (const listener of listeners) listener() }, subscribe: (fn) => (listeners.add(fn), () => listeners.delete(fn)) }
+  }
+  const source = await readFile(new URL(import.meta.resolve('@deepseek-ai/dsh-client-ui-settings-plugins/client')), 'utf8')
+  runInNewContext(source.replace('exports.apply = apply;', 'exports.TestForm = CardForm;\nexports.apply = apply;'), {
+    window: { __ModuleLoader__: { load: (value) => { definition = value } } },
+  })
+  const { TestForm } = definition.factory((name) => name === '@deepseek-ai/dsh-client-store' ? { createSnapshotStore } : {})
+  let stored = { profiles: '' }
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const scope = {
+    subscribe: () => () => {},
+    getSnapshot: () => ({ status: 'ready', writable: true, value: stored, user: stored, base: {} }),
+    set: async (field, value) => { await gate; stored = { ...stored, [field]: value } },
+  }
+  const client = globalThis.loaded.factory((name) => name === '@deepseek-ai/dsh-client-ui-primitives' ? { SettingsFormModel: TestForm } : {})
+  const controller = new client.ProfilesSettingsController({ configForms: { get: () => scope } })
+  const catalog = client.profileCatalog('save-order')
+  t.after(() => catalog.dispose())
+  let reads = 0
+  t.mock.method(globalThis, 'fetch', async () => {
+    reads++
+    return Response.json({ profiles: stored.profiles ? [{ name: 'Saved display name' }] : [] })
+  })
+  const action = controller.inject()
+  action.edit('profiles', JSON.stringify({ version: 2, connections: [], profiles: [{ id: 'stable', name: 'Profile', env: {}, models: {} }] }))
+  const saving = action.save()
+  assert.equal(reads, 0, 'catalog must not refresh before the Host write settles')
+  assert.equal(controller.form.shell().saving, true)
+  release()
+  await saving
+  await catalog.load()
+  assert.equal(controller.form.shell().saving, false)
+  assert.equal(catalog.store.getSnapshot().profiles[0].name, 'Saved display name')
 })

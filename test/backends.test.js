@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { currentBackend, effortName, parseCodexCache, parseCommand, parseHelpModels, parseModelList, parseOpenCodeModels, printForce, provideLaunch, resolveBackend } from '../lib/backends.js'
+import { currentBackend, effortName, parseCodexCache, parseCommand, parseHelpModels, parseModelList, parseOpenCodeModels, parseProfiles, printForce, provideLaunch, resolveBackend } from '../lib/backends.js'
 
 globalThis.window = { __ModuleLoader__: { load: (definition) => { globalThis.loaded = definition } } }
 await import('../lib/client.js')
@@ -78,6 +78,16 @@ test('root cannot ask Claude Code or CodeBuddy to bypass permissions', () => {
   assert.equal(printForce({ id: 'claude-code', permission: 'deny' }, 1000), false)
 })
 
+test('Claude print mode enables host questions and uses captured settings and effort', () => {
+  const backend = resolveBackend('claude-code')
+  const argv = backend.printArgv({ settings: '/snapshot.json', effort: 'high', permissionMode: 'plan' })
+  assert.equal(argv.includes('--disallowedTools'), false)
+  assert.equal(argv[argv.indexOf('--permission-prompt-tool') + 1], 'stdio')
+  assert.equal(argv[argv.indexOf('--setting-sources') + 1], '')
+  assert.equal(argv[argv.indexOf('--effort') + 1], 'high')
+  assert.equal(argv[argv.indexOf('--permission-mode') + 1], 'plan')
+})
+
 test('Claude Code reads a stream-json user message and keeps its own model by default', () => {
   const claude = resolveBackend('claude-code')
   assert.equal(claude.dialect, 'claude')
@@ -87,7 +97,7 @@ test('Claude Code reads a stream-json user message and keeps its own model by de
   assert.equal(claude.defaultModel, 'default')
   assert.deepEqual(claude.printArgv({ model: 'opus', resume: 's-1', force: true }), [
     'claude', '-p', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--permission-mode', 'bypassPermissions', '--disallowedTools', 'AskUserQuestion', '--model', 'opus', '--resume', 's-1',
+    '--permission-mode', 'bypassPermissions', '--permission-prompt-tool', 'stdio', '--model', 'opus', '--resume', 's-1',
   ])
   assert.ok(!claude.printArgv({ model: 'default' }).includes('--model'))
 })
@@ -182,4 +192,30 @@ test('model listings parse to ids and clean names', () => {
     { id: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5 1M' },
     { id: 'claude-fable-5-high', name: 'Claude Fable 5 1M (NO ZDR)' },
   ])
+})
+
+test('API profiles parse from the row config and drop unusable entries', () => {
+  const text = JSON.stringify([
+    { name: ' deepseek ', env: { ANTHROPIC_BASE_URL: 'https://a.example', ANTHROPIC_AUTH_TOKEN: 'sk-1', N: 1 } },
+    { name: '', env: { A: 'b' } },
+    { env: { A: 'b' } },
+  ])
+  assert.deepEqual(parseProfiles(text), [{ name: 'deepseek', env: { ANTHROPIC_BASE_URL: 'https://a.example', ANTHROPIC_AUTH_TOKEN: 'sk-1' } }])
+  assert.deepEqual(parseProfiles(''), [])
+  assert.deepEqual(parseProfiles('not json'), [])
+  assert.deepEqual(parseProfiles('{"name":"x"}'), [])
+})
+
+test('the current backend exposes its API profiles', (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: '[{"name":"glm","env":{"ANTHROPIC_BASE_URL":"https://g.example"}}]' }))
+  t.after(withdraw)
+  assert.equal(currentBackend('claude-code').profiles[0].name, 'glm')
+  assert.ok(currentBackend('claude-code').profiles[0].id)
+  assert.equal(currentBackend('claude-code').profiles[0].env.ANTHROPIC_BASE_URL, 'https://g.example')
+})
+
+test('Claude Code takes a settings file as --settings', () => {
+  const argv = resolveBackend('claude-code').printArgv({ prompt: '', settings: '/tmp/p.json' })
+  assert.deepEqual(argv.slice(argv.indexOf('--settings'), argv.indexOf('--settings') + 2), ['--settings', '/tmp/p.json'])
+  assert.equal(resolveBackend('claude-code').printArgv({ prompt: '' }).includes('--settings'), false)
 })
