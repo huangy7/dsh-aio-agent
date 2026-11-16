@@ -41,6 +41,8 @@ dsh plugin add github:cocofhu/dsh-aio-agent
 
 `/resume` 续接本机已经存在的 CLI 会话。弹窗先列出当前工作区，再列出其他工作区，每条包含标题、时间和短 ID。也可以直接输入 `/resume <会话 ID>`。之后的轮次会把这个 ID 交给 CLI（`--resume`、`codex exec resume`、`opencode run --session`，Kimi Code 则用 ACP 的 `session/load`）。DSH 保留自己的对话记录，不会把 CLI 的历史整段导入。续接之后，对话里会出现一张续接卡片，输入框上方会一直显示「正在续接」和会话标题，侧边栏标题也会改成它。
 
+Claude Code 模式还会通过当前 CLI 的初始化协议发现 `/simplify`、`/code-review`、`/update-config` 等内置技能，菜单支持按名称和描述搜索。发现过程不发送模型请求；内置技能的指令由 Claude 自己加载，不提供本地 `SKILL.md` 预览。
+
 ## 配置
 
 **插件 → AIO Agent** 中每个 Agent 是一个可单独开关的组件；关闭后，它的模式和模型都会移除。点击 **配置** 打开该 Agent 的页面：

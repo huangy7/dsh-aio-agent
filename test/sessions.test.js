@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { handleProfile, handleResume } from '../lib/driver.js'
 import { provideLaunch } from '../lib/backends.js'
@@ -233,6 +234,27 @@ test('the skills route reports every scanned skill with its origin', async () =>
   } finally {
     await rm(home, { recursive: true, force: true })
   }
+})
+
+test('the skills route discovers native commands only for the Claude Code preset', async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), 'aio-native-commands-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const fixture = fileURLToPath(new URL('./fixtures/claude-commands.mjs', import.meta.url))
+  const withdraw = provideLaunch('claude-code', () => ({ command: [process.execPath, fixture] }))
+  t.after(withdraw)
+  let preset = 'aio-claude-code'
+  const ctx = {
+    aioHome: cwd,
+    sessions: { get: () => ({ header: { cwd } }) },
+    sessionProjections: { stateOf: () => preset },
+  }
+  const request = { url: 'http://localhost/api/aio-agent/skills?sessionId=s1' }
+  const claude = await (await serveSkills(ctx, request)).json()
+  assert.deepEqual(claude.commands.map((command) => command.name), ['simplify', 'code-review', 'review', 'update-config'])
+  assert.equal(claude.commands[0].description, 'Clean up changed code')
+  preset = 'aio-codex'
+  const codex = await (await serveSkills(ctx, request)).json()
+  assert.deepEqual(codex.commands, [])
 })
 
 test('the sessions route lists the preset backend and reports the active id', async () => {

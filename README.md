@@ -41,6 +41,8 @@ Type `/` to run a skill from this workspace or your home directory. Skills are r
 
 `/resume` continues a CLI session that already exists on this machine. The popup lists the current workspace first, then other workspaces, with the title, time and a short id. `/resume <session-id>` binds that id directly. Later turns pass it to the CLI (`--resume`, `codex exec resume`, `opencode run --session`, or ACP `session/load` for Kimi Code). DSH keeps its own transcript; it does not copy the CLI's history. After a resume, the transcript shows a resume card, a bar above the composer stays visible with that session's title, and the sidebar title changes to it.
 
+The Claude Code preset also discovers native skills such as `/simplify`, `/code-review` and `/update-config` through the configured CLI's initialization protocol. Search matches their names and descriptions. Discovery submits no model prompt; Claude loads the native instructions itself, and these entries have no local `SKILL.md` preview.
+
 ## Configure
 
 **Plugins → AIO Agent** lists one switchable component per agent; switching one off removes its mode and its models. **Configure** opens the agent's page:
