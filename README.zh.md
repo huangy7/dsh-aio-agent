@@ -51,9 +51,13 @@ Claude Code 模式还会通过当前 CLI 的初始化协议发现 `/simplify`、
 - **默认模型**：会话未选择模型时使用。
 - **启动命令**：替换内置的可执行文件，例如 `"/opt/Cursor Agent/cursor-agent"` 或 `/opt/codex --profile work`，后面附加的选项会保留；含空格的路径要加引号。
 - **自动批准权限请求**：Agent 在执行操作前（如运行命令）发起请求时，开启则批准，关闭则拒绝。Agent 无需请求就能执行的操作，由它自身的设置决定。
-- **API 配置**（Claude Code）：一组命名的环境变量，例如 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 和 `ANTHROPIC_DEFAULT_*_MODEL`。也可以从 **设置 → API 配置** 直接打开这一页。每个会话在输入框上方的下拉框中选择一个，或恢复为 Claude Code 自身配置。选中的配置每轮写成临时 `--settings` 文件传给 CLI，因此能覆盖 `~/.claude/settings.json` 而不改动它。切换配置会新开一个 CLI 会话：旧会话 ID 属于另一个端点，无法续接。
+- **API 配置**（Claude Code）：从 **设置 → API 配置** 或插件页管理可搜索的配置列表与独立的 **连接**（URL、API Key）。多个配置可引用同一连接，并分别设置 Sonnet、Opus、Haiku 和默认模型的实际 ID 与显示名称。点击 **获取模型列表** 从连接读取可用模型，手动填写的显示名称优先。会话中的配置选择器位于输入框底部、模型按钮旁边；切换或修改配置从下一轮生效，并通过原来的 `--resume` 继续当前 CLI 会话。每轮用临时 `--settings` 文件传入配置，不改动 `~/.claude/settings.json`。旧配置自动迁移，共享连接的 URL 和 Key 只需维护一次。
 
 保存的值写入 profile 的 `cordis.patch.yml`，从下一轮开始生效，无需重新加载。API 配置里的 token 在该文件中以明文保存，与 CLI 自身的配置相同。
+
+Claude 配置还支持推理强度、API 超时、最大输出 token 数、Beta 与流量开关、权限模式，以及 Commit/PR 署名。每个 DSH 会话首次成功启动时，将完整的用户、项目、项目 local 设置及支持的环境变量保存为独立快照，位于 `~/.dsh/aio-agent/session-settings`。后续每轮在这份基线之上应用当前配置；字段可选择继承快照或清除继承值、使用 CLI 默认值，空署名表示禁用署名。修改配置保留原 CLI 会话 ID，不改动全局设置文件；Claude 的托管策略仍然生效。
+
+Claude 的 `AskUserQuestion` 会在 App 中显示提问，选择项与自定义答案会交回当前正在运行的 CLI，即使开启完全权限也可使用。停止当前轮次会取消待回答的提问。仍然每轮启动一个进程，下一轮通过 `--resume` 续接原会话。
 
 ## 会话日志
 

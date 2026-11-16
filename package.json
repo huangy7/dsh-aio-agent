@@ -83,7 +83,8 @@
   },
   "scripts": {
     "test": "node --import ./test/dsh-runtime.mjs --test test/*.test.js",
-    "build:logos": "node scripts/build-client-logos.mjs"
+    "build:logos": "node scripts/build-client-logos.mjs",
+    "build:profiles": "node scripts/build-client-profiles.mjs"
   },
   "icon": "./assets/provider-logos/models.svg"
 }

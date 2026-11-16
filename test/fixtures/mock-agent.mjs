@@ -33,6 +33,19 @@ function hold(prompt) {
   setInterval(() => {}, 1000)
 }
 
+function runPrompt(prompt) {
+  const settingsAt = args.indexOf('--settings')
+  const settings = settingsAt >= 0 ? JSON.parse(readFileSync(args[settingsAt + 1], 'utf8')) : undefined
+  log({ prompt, resume, args, settings })
+  if (dialect === 'codex') emit({ type: 'thread.started', thread_id: sessionId })
+  else if (dialect === 'open-code') emit({ type: 'step_start', sessionID: sessionId })
+  else emit({ type: 'system', session_id: sessionId })
+  text(`reply:${prompt}`)
+  if (prompt.startsWith('ask-')) return true
+  if (prompt.includes('hold')) hold(prompt)
+  else setTimeout(() => { result(prompt.includes('fail')); process.exit(prompt.includes('fail') ? 1 : 0) }, 100)
+}
+
 if (dialect === 'acp') {
   let pending
   log({ method: 'start' })
@@ -55,19 +68,35 @@ if (dialect === 'acp') {
       pending = undefined
     }
   })
+} else if (dialect === 'claude' && args.includes('--permission-prompt-tool')) {
+  let hook
+  const questions = { questions: [{ question: 'Which database?', header: 'Database', options: [{ label: 'SQLite', description: 'Local database' }, { label: 'Postgres' }], multiSelect: false }] }
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    const frame = JSON.parse(line)
+    if (frame.type === 'control_request' && frame.request?.subtype === 'initialize') {
+      hook = frame.request.hooks?.PreToolUse?.[0]?.hookCallbackIds?.[0]
+      emit({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: { commands: [] } } })
+    } else if (frame.type === 'user') {
+      const prompt = frame.message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n')
+      if (runPrompt(prompt)) {
+        emit({ type: 'assistant', session_id: sessionId, message: { id: `question-${process.pid}`, content: [{ type: 'tool_use', id: 'tool-question', name: 'AskUserQuestion', input: questions }] } })
+        emit({ type: 'control_request', request_id: 'question-hook', request: { subtype: 'hook_callback', callback_id: hook, tool_use_id: 'tool-question', input: { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: questions } } })
+      }
+    } else if (frame.type === 'control_response') {
+      const answers = frame.response?.response?.hookSpecificOutput?.updatedInput?.answers
+      if (!answers || frame.response.subtype !== 'success') { result(true); process.exit(1); return }
+      log({ answered: answers, resume })
+      emit({ type: 'user', session_id: sessionId, message: { content: [{ type: 'tool_result', tool_use_id: 'tool-question', content: JSON.stringify(answers) }] } })
+      text(`answer:${answers['Which database?']}`)
+      result()
+      process.exit(0)
+    }
+  })
 } else {
   let input = ''
   process.stdin.setEncoding('utf8').on('data', (chunk) => { input += chunk })
   process.stdin.on('end', () => {
     const prompt = dialect === 'claude' ? JSON.parse(input).message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n') : dialect === 'cursor' ? input : args.at(-1)
-    const settingsAt = args.indexOf('--settings')
-    const settings = settingsAt >= 0 ? JSON.parse(readFileSync(args[settingsAt + 1], 'utf8')) : undefined
-    log({ prompt, resume, args, settings })
-    if (dialect === 'codex') emit({ type: 'thread.started', thread_id: sessionId })
-    else if (dialect === 'open-code') emit({ type: 'step_start', sessionID: sessionId })
-    else emit({ type: 'system', session_id: sessionId })
-    text(`reply:${prompt}`)
-    if (prompt.includes('hold')) hold(prompt)
-    else setTimeout(() => { result(prompt.includes('fail')); process.exit(prompt.includes('fail') ? 1 : 0) }, 100)
+    runPrompt(prompt)
   })
 }

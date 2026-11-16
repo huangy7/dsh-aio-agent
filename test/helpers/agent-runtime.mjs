@@ -6,6 +6,8 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
+import { join } from 'node:path'
 import * as driver from '../../lib/driver.js'
 
 /** Real Cordis scopes, durable Session projections and the installed DSH loop. */
@@ -22,6 +24,7 @@ export async function agentRuntime(t, { backend = 'cursor', cwd, skills, setup }
   ctx.plugin(AgentRegistry)
   ctx.plugin(SessionProjectionRegistry)
   ctx.plugin(SystemPrompt, { includeHarnessIdentity: false, includeRuntimeContext: false })
+  ctx.plugin(UserQuestionService)
   const loop = ctx.plugin(AgentLoop, { agents: [], maxParallelToolCalls: 1 })
   await loop.await()
   let handle
@@ -31,7 +34,7 @@ export async function agentRuntime(t, { backend = 'cursor', cwd, skills, setup }
     meta: { cwd },
     async setup(agentCtx, agent) {
       agentCtx.on('agent/error', ({ error }) => errors.push(error))
-      await agentCtx.plugin(driver, { backend }).await()
+      await agentCtx.plugin(driver, { backend, settingsHome: cwd ? join(cwd, '.aio-home') : undefined, snapshotDir: cwd ? join(cwd, '.aio-session-settings') : undefined }).await()
       await setup?.(agentCtx, agent)
     },
   })

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { handleProfile, handleResume } from '../lib/driver.js'
 import { provideLaunch } from '../lib/backends.js'
-import { bindingProjection, buildDiagnosticTrace, profileProjection, serveProfiles, serveSessions, serveSkills, serveTrace } from '../lib/index.js'
+import { bindingProjection, buildDiagnosticTrace, profileProjection, serveModelList, serveProfiles, serveSessions, serveSkills, serveTrace } from '../lib/index.js'
 import { cursorWorkspaceHash, escapeProjectDir, foldClaudeTranscript, foldCodebuddyTranscript, isSessionId, listBackendSessions, parseCodexIndex, parseOpenCodeList, readBinding, readProfile } from '../lib/sessions.js'
 
 test('project directories and the Cursor workspace hash follow each CLI', () => {
@@ -346,7 +346,8 @@ test('the API profile command records, replaces and clears the session profile',
 
   assert.equal(run('nope').kind, 'error')
   assert.equal(run('deepseek').kind, 'success')
-  assert.deepEqual(readProfile(session), { name: 'deepseek' })
+  assert.equal(readProfile(session).name, 'deepseek')
+  assert.ok(readProfile(session).id)
   assert.equal(readBinding(session), undefined)
   assert.equal(run('deepseek').text, 'Already using API profile "deepseek".')
   assert.equal(run('off').kind, 'success')
@@ -376,7 +377,96 @@ test('the profiles route lists Claude Code profiles and the session pick', async
     sessionProjections: { stateOf: () => 'aio-claude-code' },
   }
   const listed = await (await serveProfiles(ctx, { url: 'http://localhost/api/aio-agent/profiles?sessionId=s1' })).json()
-  assert.deepEqual(listed, { profiles: [{ name: 'deepseek', baseUrl: 'https://a.example' }], active: 'deepseek' })
+  assert.equal(listed.active, 'deepseek')
+  assert.ok(listed.activeId)
+  assert.ok(listed.profiles[0].id)
+  assert.equal(listed.profiles[0].baseUrl, 'https://a.example')
+  assert.equal(listed.profiles[0].models[0].id, 'default')
   const other = { ...ctx, sessionProjections: { stateOf: () => 'aio-codex' } }
-  assert.deepEqual(await (await serveProfiles(other, { url: 'http://localhost/api/aio-agent/profiles?sessionId=s1' })).json(), { profiles: [], active: null })
+  assert.deepEqual(await (await serveProfiles(other, { url: 'http://localhost/api/aio-agent/profiles?sessionId=s1' })).json(), { profiles: [], active: null, activeId: null })
+})
+
+test('partial API profiles inherit local model settings and resolve the configured default role', async (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify([
+    { name: 'Connection only', env: { ANTHROPIC_BASE_URL: 'https://example.test' } },
+    { name: 'Sonnet override', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'new-sonnet' } },
+  ]) }))
+  t.after(withdraw)
+  const ctx = { sessions: { get: () => undefined } }
+  const body = await (await serveProfiles(ctx, { url: 'http://localhost/api/aio-agent/profiles?sessionId=new' }, {
+    env: {}, readFile: async () => JSON.stringify({ model: 'opus', env: {
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'local-opus', ANTHROPIC_DEFAULT_OPUS_MODEL_NAME: 'Local Opus',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'local-sonnet', ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: 'Local Sonnet',
+    } }),
+  })).json()
+  assert.equal(body.profiles[0].models[0].name, 'Local Opus')
+  assert.equal(body.profiles[1].models[0].name, 'Local Opus')
+  assert.equal(body.profiles[1].models[1].name, 'new-sonnet')
+})
+
+test('API profiles can be read before the desktop Host materializes the session', async (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify([{ name: 'Work', env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'model-a' } }]) }))
+  t.after(withdraw)
+  const ctx = { sessions: { get: () => undefined }, sessionProjections: { stateOf: () => { throw new Error('no live session') } } }
+  const response = await serveProfiles(ctx, { url: 'http://localhost/api/aio-agent/profiles?sessionId=unmaterialized' })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.profiles[0].name, 'Work')
+  assert.ok(body.defaults.models.length > 0)
+})
+
+test('cold desktop profile reads inspect the persisted workspace and selection without resuming', async (t) => {
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify([{ name: 'Work', env: {} }]) }))
+  t.after(withdraw)
+  const session = fakeSession([{ type: 'plugin:dsh-aio-agent/profile', data: { name: 'Work' } }])
+  session.header = { cwd: '/workspace/project' }
+  const ctx = {
+    sessions: { get: () => undefined }, sessionProjections: { stateOf: () => 'aio-claude-code' },
+    sessionQuery: { inspectSession: async (id, read) => { assert.equal(id, 'cold'); return read(session) } },
+  }
+  const files = []
+  const body = await (await serveProfiles(ctx, { url: 'http://localhost/api/aio-agent/profiles?sessionId=cold' }, {
+    env: {}, home: '/user', readFile: async (path) => {
+      files.push(path)
+      return JSON.stringify(path === '/workspace/project/.claude/settings.local.json' ? { env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'workspace-model', ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: 'Workspace Model' } } : {})
+    },
+  })).json()
+  assert.equal(body.active, 'Work')
+  assert.equal(body.defaults.models[0].name, 'Workspace Model')
+  assert.ok(files.includes('/workspace/project/.claude/settings.local.json'))
+})
+
+test('profile selections store stable IDs and switching and clearing preserve resume binding', (t) => {
+  const doc = { version: 2, connections: [], profiles: [{ id: 'p1', name: 'Work', connectionId: '', env: {}, models: {} }] }
+  const withdraw = provideLaunch('claude-code', () => ({ profiles: JSON.stringify(doc) })); t.after(withdraw)
+  const events = [{ type: 'plugin:dsh-aio-agent/binding', data: { backend: 'claude-code', chatId: 'original' } }]
+  const session = fakeSession(events)
+  const run = (rawInput) => handleProfile({ session, backendId: 'claude-code', rawInput, record: (type, data) => events.push({ type, data }) })
+  assert.equal(run('p1').kind, 'success')
+  assert.deepEqual(readProfile(session), { id: 'p1', name: 'Work' })
+  assert.equal(readBinding(session).chatId, 'original')
+  const projection = profileProjection()
+  assert.deepEqual(projection.stateSchema.parse(projection.apply(null, events.at(-1))), { id: 'p1', name: 'Work' })
+  run('off')
+  assert.equal(readProfile(session), undefined)
+  assert.equal(readBinding(session).chatId, 'original')
+})
+
+test('model discovery route accepts staged settings and returns sanitized errors', async () => {
+  const request = new Request('http://localhost/api/aio-agent/models', { method: 'POST', body: JSON.stringify({ baseUrl: 'https://api.example/v2', apiKey: 'secret' }), headers: { 'Content-Type': 'application/json' } })
+  const response = await serveModelList({}, request, async () => Response.json({ data: [{ id: 'm', name: 'Model' }] }))
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { models: [{ id: 'm', name: 'Model' }] })
+  const bad = await serveModelList({}, new Request('http://localhost/api/aio-agent/models', { method: 'POST', body: 'bad' }))
+  assert.equal(bad.status, 400)
+  const failure = await serveModelList({}, new Request('http://localhost/api/aio-agent/models', { method: 'POST', body: JSON.stringify({ baseUrl: 'https://api.example', apiKey: 'secret' }) }), async () => new Response('secret', { status: 403 }))
+  assert.equal(failure.status, 502)
+  assert.doesNotMatch(JSON.stringify(await failure.json()), /secret/)
+})
+
+test('model discovery accepts the Host buffered request body', async () => {
+  const body = new TextEncoder().encode(JSON.stringify({ baseUrl: 'https://api.example', apiKey: 'secret' })).buffer
+  const result = await serveModelList({}, { body }, async () => Response.json({ data: [{ id: 'm' }] }))
+  assert.equal(result.status, 200)
+  assert.deepEqual(await result.json(), { models: [{ id: 'm', name: 'm' }] })
 })
